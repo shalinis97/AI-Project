@@ -1,0 +1,10 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+
+.env
+Data_db
+file_data.db
+cragbot_feedback_log.json
+frequency_dictionary_en_82_765.txt
+Mistral-7B-Instruct-v0.3.Q4_K_M.gguf
+venv
