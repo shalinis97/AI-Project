@@ -22,7 +22,8 @@ from langchain_chroma import Chroma
 from langchain.chains import RetrievalQA
 from langchain_community.llms import LlamaCpp
 from langchain_core.documents import Document
-
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
 
 from utils import read_files,save_to_db,get_file_from_db,init_db
 
@@ -37,7 +38,8 @@ from datetime import datetime
 
 
 
-st.set_page_config(page_title="Document RAG Assistant ", layout="centered")
+st.header("Document RAG Assistant ")
+
 
 
 
@@ -82,8 +84,9 @@ if uploaded_files:
                 save_to_db(key, ext, str(val))
 
         
-        st.write("Files:")
-        st.write(file_data.keys())
+        #st.write("Files:")
+        #st.write(file_data.keys())
+        st.success("Files uploaded!")
 
 # Prepare documents as a list
 documents = []
@@ -164,12 +167,18 @@ def load_llm():
 
 llm = load_llm()
 
-
+mem = ConversationBufferMemory(
+    memory_key="chat_history",
+    return_messages=True,
+    output_key="answer"  
+)
 # Build RetrievalQA chain
-qa_chain = RetrievalQA.from_chain_type(
+qa_chain = ConversationalRetrievalChain.from_llm(
     llm=llm,
     retriever=retriever,
     chain_type="stuff",
+    memory=mem,
+    output_key="answer",
     return_source_documents=True
 )
 
@@ -247,56 +256,11 @@ def detect_intent(query):
 
 
 
-st.markdown("## Document RAG Assistant ")
+
 
 # Initialize chat history
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-
-# Chat input form
-with st.form("chat_form", clear_on_submit=True):
-    query = st.text_input("Chat Input", placeholder="Type your question here...", label_visibility="collapsed")  # ✅ hides it visually
-    submitted = st.form_submit_button("Send")
-
-if submitted and query:
-    st.session_state.chat_history.append({"role": "user", "message": query})
-
-    corrected_query = typo_correction(query)
-    rephrased_query, semantic_score = semantic_correction(corrected_query)
-    intent, intent_score = detect_intent(rephrased_query)
-
-    print(f"Corrected Query: {corrected_query}")
-    print(f"Rephrased Query: {rephrased_query}")
-    print(f"Detected Intent: {intent} (Score: {intent_score})") 
-    # Retrieve documents
-    docs_with_scores = db.similarity_search_with_score(rephrased_query, k=3)
-
-    if docs_with_scores:
-        similarity_score = docs_with_scores[0][1]  # Top document’s score
-        docs = [doc[0] for doc in docs_with_scores]
-    else:
-        similarity_score = 0.0
-        docs = []
-
-    if not docs:
-        bot_message = "⚠️ No relevant documents found. Try a different query."
-    else:
-        with st.spinner("🔎 Searching documents..."):
-            response = qa_chain.combine_documents_chain.invoke({
-                    "input_documents": docs,
-                    "question": rephrased_query
-                })
-         
-            final_confidence = calculate_confidence(similarity_score, intent_score, semantic_score)
-
-            if final_confidence < 0.4:
-                bot_message = "⚠️ I'm not confident about this answer. Please provide more details."
-            else:
-                bot_message = response['output_text'] if isinstance(response, dict) else str(response)
-            log_interaction(query, corrected_query, rephrased_query, bot_message, final_confidence)
-
-    st.session_state.chat_history.append({"role": "bot", "message": bot_message})
-
 
 # Display chat history
 for chat in st.session_state.chat_history:
@@ -306,3 +270,71 @@ for chat in st.session_state.chat_history:
     else:
         with st.chat_message("assistant"):
             st.markdown(f"**Bot:** {chat['message']}")
+
+
+# Chat input form
+# with st.form("chat_form", clear_on_submit=True):
+#     query = st.text_input("Chat Input", placeholder="Type your question here...", label_visibility="collapsed")  # ✅ hides it visually
+#     submitted = st.form_submit_button("Send")
+
+# if submitted and query:
+#     st.session_state.chat_history.append({"role": "user", "message": query})
+
+query = st.chat_input("Type your message...")
+if query:
+    st.session_state.chat_history.append({"role": "user", "message": query})
+
+
+    corrected_query = typo_correction(query)
+    rephrased_query, semantic_score = semantic_correction(corrected_query)
+    intent, intent_score = detect_intent(rephrased_query)
+
+    print(f"Corrected Query: {corrected_query}")
+    print(f"Rephrased Query: {rephrased_query}")
+   
+    # Retrieve documents
+    docs_with_scores = db.similarity_search_with_score(rephrased_query, k=3)
+
+    if docs_with_scores:
+        similarity_score =  docs_with_scores[0][1]  # Top document’s score
+        docs = [doc[0] for doc in docs_with_scores]
+    else:
+        similarity_score = 0.0
+        docs = []
+
+    if not docs:
+        bot_message = "⚠️ No relevant documents found. Try a different query."
+    else:
+        with st.spinner("🔎 Searching documents..."):
+            response = qa_chain.invoke({
+                "question": rephrased_query
+            })
+
+            # response = qa_chain.combine_documents_chain.invoke({
+            #         "input_documents": docs,
+            #         "question": rephrased_query
+            #     })
+         
+            final_confidence = calculate_confidence(similarity_score, intent_score, semantic_score)
+            print(f"Final Confidence Score: {final_confidence}")
+            print(f"(similarity Score: {similarity_score})")
+            print(f"(semantic Score: {semantic_score})")
+            print(f"Detected Intent: {intent} (Score: {intent_score})") 
+            if final_confidence < 0.4:
+                bot_message = "⚠️ I'm not confident about this answer. Please provide more details."
+            else:
+                bot_message = response['answer'] if isinstance(response, dict) else str(response)
+
+
+            qa_chain.memory.save_context(
+                {"question": rephrased_query},
+                {"answer": bot_message}
+            )
+
+            log_interaction(query, corrected_query, rephrased_query, bot_message, final_confidence)
+
+    st.session_state.chat_history.append({"role": "bot", "message": bot_message})
+
+    # Rerun to update UI
+    st.rerun() 
+
